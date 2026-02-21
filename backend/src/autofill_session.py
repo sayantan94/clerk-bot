@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import sys
 import threading
 import uuid
 from enum import Enum
@@ -171,6 +172,22 @@ class AutofillSession:
         from src.tools.ask_human import set_current_session
         from src.tools.page_bridge import set_current_session as set_bridge_session
 
+        # Suppress "Event loop is closed" RuntimeError from httpx async cleanup.
+        # Some model SDKs (e.g. Anthropic) use httpx with async __del__ methods
+        # that fire after the thread's event loop is gone — harmless but noisy.
+        # Safe no-op for providers that don't use httpx (e.g. Bedrock/boto3).
+        _orig_hook = sys.unraisablehook
+
+        def _quiet_hook(unraisable):
+            if (
+                isinstance(unraisable.exc_value, RuntimeError)
+                and "Event loop is closed" in str(unraisable.exc_value)
+            ):
+                return
+            _orig_hook(unraisable)
+
+        sys.unraisablehook = _quiet_hook
+
         try:
             set_current_session(self)
             set_bridge_session(self)
@@ -233,6 +250,7 @@ class AutofillSession:
         finally:
             set_current_session(None)
             set_bridge_session(None)
+            sys.unraisablehook = _orig_hook
 
 
 _sessions: dict[str, AutofillSession] = {}
